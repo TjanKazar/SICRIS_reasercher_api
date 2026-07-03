@@ -1,3 +1,5 @@
+import asyncio
+
 from app.services.http_client import get
 from bs4 import BeautifulSoup
 import re
@@ -109,3 +111,23 @@ async def scrape_cobiss(cobiss_id: int, _token: str):
         "url": f"{url}?format=detail",
         "podrobni_podatki": detail_data,
     }
+
+
+async def scrape_cobiss_many(cobiss_ids: list[int], token: str, concurrency: int = 5):
+    sem = asyncio.Semaphore(concurrency)
+
+    async def safe_scrape(cobiss_id: int):
+        async with sem:
+            return await scrape_cobiss(cobiss_id, token)
+
+    results = await asyncio.gather(*(safe_scrape(cobiss_id) for cobiss_id in cobiss_ids), return_exceptions=True)
+
+    cleaned: list[dict] = []
+    errors: list[str] = []
+    for result in results:
+        if isinstance(result, Exception):
+            errors.append(str(result))
+            continue
+        cleaned.append(result)
+
+    return cleaned, errors
