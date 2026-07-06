@@ -1,0 +1,449 @@
+{
+  "info": {
+    "_postman_id": "7b65c697-8eb5-4387-8ab8-f05f297c5149",
+    "name": "SICRIS COBISS API",
+    "description": "Token-based examples for presenting the SICRIS / COBISS FastAPI service. Run Auth / Get token first.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "username",
+      "value": "your-sicris-username"
+    },
+    {
+      "key": "password",
+      "value": "your-sicris-password"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "author_id",
+      "value": "35512"
+    },
+    {
+      "key": "author_id_2",
+      "value": "27561"
+    },
+    {
+      "key": "author_id_3",
+      "value": "39791"
+    },
+    {
+      "key": "year",
+      "value": "2024"
+    },
+    {
+      "key": "search_query",
+      "value": "machine"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Get token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('token returned', function () {",
+                  "  pm.expect(json.access_token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.collectionVariables.set('token', json.access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/token",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "token"
+              ]
+            },
+            "description": "Exchange SICRIS username/password for a Bearer token. This request stores access_token in the collection token variable."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health / docs",
+      "item": [
+        {
+          "name": "OpenAPI docs",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/docs",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "docs"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Single author",
+      "item": [
+        {
+          "name": "All records",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}"
+              ]
+            },
+            "description": "Fetch all records for one SICRIS researcher. Checks MongoDB first, then scrapes and schedules cache save on miss."
+          }
+        },
+        {
+          "name": "All records limited",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}?limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Fetch the first 20 records and schedule a full background cache refresh if the author was not cached."
+          }
+        },
+        {
+          "name": "Force refresh records",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/refresh",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "refresh"
+              ]
+            },
+            "description": "Ignore cached records, fetch fresh data from SICRIS/COBISS, save it to MongoDB, and return the fresh records."
+          }
+        },
+        {
+          "name": "Cache metadata",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/cache",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "cache"
+              ]
+            },
+            "description": "Show MongoDB cache state for this author without returning the full cached record list."
+          }
+        },
+        {
+          "name": "Latest 20 works",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/latest?limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "latest"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Return newest works by parsed COBISS Leto value."
+          }
+        },
+        {
+          "name": "Works by year",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/year/{{year}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "year",
+                "{{year}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Year summary",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/years",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "years"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Coauthored works",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/coauthored",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "coauthored"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Solo works",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/solo",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "solo"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Works with DOI",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/doi",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "doi"
+              ]
+            },
+            "description": "Return works that include a DOI. A DOI is a permanent publication identifier, often used for academic papers."
+          }
+        },
+        {
+          "name": "Type summary",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/records/{{author_id}}/types",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "records",
+                "{{author_id}}",
+                "types"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Multiple authors",
+      "item": [
+        {
+          "name": "Unique works from three authors",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/authors/unique?user_numbers={{author_id}}&user_numbers={{author_id_2}}&user_numbers={{author_id_3}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "authors",
+                "unique"
+              ],
+              "query": [
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id}}"
+                },
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id_2}}"
+                },
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id_3}}"
+                }
+              ]
+            },
+            "description": "Combines several researcher bibliographies and deduplicates by COBISS ID."
+          }
+        },
+        {
+          "name": "Collaborative works from three authors",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/authors/collaborations?user_numbers={{author_id}}&user_numbers={{author_id_2}}&user_numbers={{author_id_3}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "authors",
+                "collaborations"
+              ],
+              "query": [
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id}}"
+                },
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id_2}}"
+                },
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id_3}}"
+                }
+              ]
+            },
+            "description": "Returns unique works from the selected researchers where COBISS lists two or more authors."
+          }
+        },
+        {
+          "name": "Common works between two authors",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/authors/common?user_numbers={{author_id}}&user_numbers={{author_id_2}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "authors",
+                "common"
+              ],
+              "query": [
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id}}"
+                },
+                {
+                  "key": "user_numbers",
+                  "value": "{{author_id_2}}"
+                }
+              ]
+            },
+            "description": "Returns records that appear in every requested author's bibliography."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -72,6 +72,46 @@ async def get_cached_query(user_number: str):
     return cached
 
 
+async def get_cache_metadata(user_number: str):
+    if not _mongodb_uri():
+        print(f"[mongo] metadata lookup skipped for {user_number}: config missing")
+        return {
+            "user_number": user_number,
+            "cache_enabled": False,
+            "cached": False,
+        }
+
+    print(f"[mongo] metadata lookup start for {user_number} ({_mongodb_uri_summary()})")
+    collection = await _get_collection()
+    cached = await collection.find_one(
+        {"user_number": user_number},
+        {
+            "_id": False,
+            "user_number": True,
+            "author": True,
+            "total_count": True,
+            "complete": True,
+            "created_at": True,
+            "updated_at": True,
+        },
+    )
+
+    if not cached:
+        print(f"[mongo] metadata lookup miss for {user_number}")
+        return {
+            "user_number": user_number,
+            "cache_enabled": True,
+            "cached": False,
+        }
+
+    print(f"[mongo] metadata lookup hit for {user_number}")
+    return {
+        "cache_enabled": True,
+        "cached": bool(cached.get("complete")),
+        **cached,
+    }
+
+
 async def save_query_document(document: dict):
     if not _mongodb_uri():
         print(f"[mongo] save skipped for {document.get('user_number')}: config missing")
