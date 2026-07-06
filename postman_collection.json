@@ -18,7 +18,7 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "http://localhost:8000"
+      "value": "https://sicris-reasercher-api.onrender.com"
     },
     {
       "key": "username",
