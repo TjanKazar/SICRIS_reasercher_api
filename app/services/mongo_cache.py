@@ -8,6 +8,7 @@ _client: AsyncIOMotorClient | None = None
 _index_ready = False
 CACHE_MAX_AGE = timedelta(days=7)
 _runtime_config: dict[str, str] = {}
+_cache_unavailable = False
 
 
 def _mongodb_uri() -> str | None:
@@ -20,6 +21,21 @@ def _mongodb_db_name() -> str:
 
 def _mongodb_collection_name() -> str:
     return _runtime_config.get("collection") or os.getenv("MONGODB_COLLECTION", "author_queries")
+
+
+def _cache_is_enabled() -> bool:
+    return bool(_mongodb_uri()) and not _cache_unavailable
+
+
+def _disable_cache(error: Exception) -> None:
+    """Fail open when MongoDB is unavailable so source requests still succeed."""
+    global _client, _index_ready, _cache_unavailable
+    _cache_unavailable = True
+    _index_ready = False
+    if _client is not None:
+        _client.close()
+        _client = None
+    print(f"[mongo] cache disabled after connection error: {type(error).__name__}")
 
 
 def _cache_cutoff() -> datetime:
@@ -74,7 +90,7 @@ async def _get_collection():
 
 async def configure_mongodb(uri: str, database: str = "sicris", collection: str = "author_queries") -> dict[str, str]:
     """Validate and activate MongoDB settings for the current application process."""
-    global _client, _index_ready
+    global _client, _index_ready, _cache_unavailable
 
     if not uri.startswith(("mongodb://", "mongodb+srv://")):
         raise ValueError("mongodb_uri must start with mongodb:// or mongodb+srv://")
@@ -91,11 +107,13 @@ async def configure_mongodb(uri: str, database: str = "sicris", collection: str 
     previous_client = _client
     previous_index_ready = _index_ready
     previous_config = dict(_runtime_config)
+    previous_cache_unavailable = _cache_unavailable
     _runtime_config.update(
         {"uri": uri, "database": database.strip(), "collection": collection.strip()}
     )
     _client = candidate
     _index_ready = False
+    _cache_unavailable = False
     try:
         await _get_collection()
     except Exception:
@@ -104,6 +122,7 @@ async def configure_mongodb(uri: str, database: str = "sicris", collection: str 
         _runtime_config.update(previous_config)
         _client = previous_client
         _index_ready = previous_index_ready
+        _cache_unavailable = previous_cache_unavailable
         raise
 
     if previous_client is not None and previous_client is not candidate:
@@ -117,43 +136,51 @@ async def configure_mongodb(uri: str, database: str = "sicris", collection: str 
 
 
 async def get_cached_query(user_number: str):
-    if not _mongodb_uri():
-        print(f"[mongo] cache lookup skipped for {user_number}: config missing")
+    if not _cache_is_enabled():
+        print(f"[mongo] cache lookup skipped for {user_number}: config missing or unavailable")
         return None
 
-    print(f"[mongo] cache lookup start for {user_number} ({_mongodb_uri_summary()})")
-    collection = await _get_collection()
-    cached = await collection.find_one(
-        {"user_number": user_number, "complete": True, "updated_at": {"$gte": _cache_cutoff()}},
-        {"_id": False},
-    )
+    try:
+        print(f"[mongo] cache lookup start for {user_number} ({_mongodb_uri_summary()})")
+        collection = await _get_collection()
+        cached = await collection.find_one(
+            {"user_number": user_number, "complete": True, "updated_at": {"$gte": _cache_cutoff()}},
+            {"_id": False},
+        )
+    except Exception as exc:
+        _disable_cache(exc)
+        return None
     print(f"[mongo] cache lookup {'fresh hit' if cached else 'miss or stale'} for {user_number}")
     return cached
 
 
 async def get_cache_metadata(user_number: str):
-    if not _mongodb_uri():
-        print(f"[mongo] metadata lookup skipped for {user_number}: config missing")
+    if not _cache_is_enabled():
+        print(f"[mongo] metadata lookup skipped for {user_number}: config missing or unavailable")
         return {
             "user_number": user_number,
             "cache_enabled": False,
             "cached": False,
         }
 
-    print(f"[mongo] metadata lookup start for {user_number} ({_mongodb_uri_summary()})")
-    collection = await _get_collection()
-    cached = await collection.find_one(
-        {"user_number": user_number},
-        {
-            "_id": False,
-            "user_number": True,
-            "author": True,
-            "total_count": True,
-            "complete": True,
-            "created_at": True,
-            "updated_at": True,
-        },
-    )
+    try:
+        print(f"[mongo] metadata lookup start for {user_number} ({_mongodb_uri_summary()})")
+        collection = await _get_collection()
+        cached = await collection.find_one(
+            {"user_number": user_number},
+            {
+                "_id": False,
+                "user_number": True,
+                "author": True,
+                "total_count": True,
+                "complete": True,
+                "created_at": True,
+                "updated_at": True,
+            },
+        )
+    except Exception as exc:
+        _disable_cache(exc)
+        return {"user_number": user_number, "cache_enabled": False, "cached": False}
 
     if not cached:
         print(f"[mongo] metadata lookup miss for {user_number}")
@@ -175,18 +202,21 @@ async def get_cache_metadata(user_number: str):
 
 
 async def save_query_document(document: dict):
-    if not _mongodb_uri():
-        print(f"[mongo] save skipped for {document.get('user_number')}: config missing")
+    if not _cache_is_enabled():
+        print(f"[mongo] save skipped for {document.get('user_number')}: config missing or unavailable")
         return
 
-    print(f"[mongo] saving document for {document.get('user_number')} ({_mongodb_uri_summary()})")
-    collection = await _get_collection()
-    payload = dict(document)
-    payload["updated_at"] = datetime.now(timezone.utc)
-    print(f"[mongo] save payload complete={payload.get('complete')} total_count={payload.get('total_count')}")
-    await collection.update_one(
-        {"user_number": document["user_number"]},
-        {"$set": payload, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
-        upsert=True,
-    )
-    print(f"[mongo] save finished for {document.get('user_number')}")
+    try:
+        print(f"[mongo] saving document for {document.get('user_number')} ({_mongodb_uri_summary()})")
+        collection = await _get_collection()
+        payload = dict(document)
+        payload["updated_at"] = datetime.now(timezone.utc)
+        print(f"[mongo] save payload complete={payload.get('complete')} total_count={payload.get('total_count')}")
+        await collection.update_one(
+            {"user_number": document["user_number"]},
+            {"$set": payload, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+        print(f"[mongo] save finished for {document.get('user_number')}")
+    except Exception as exc:
+        _disable_cache(exc)

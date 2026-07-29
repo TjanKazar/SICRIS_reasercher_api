@@ -88,6 +88,8 @@ The endpoint validates the connection, creates the cache index, and never return
 
 When `MONGODB_URI` is set, a complete researcher bibliography is saved after it is queried. Cached results are served only for seven days after `updated_at`. On the next request after that period, the service fetches fresh SICRIS/COBISS data and overwrites the stored document; stale records are never returned. `POST /records/{user_number}/cache` reports whether the stored entry is fresh or stale.
 
+MongoDB is optional and fail-open: if it is absent, unreachable, or has invalid credentials, the app disables caching for the running instance and continues querying SICRIS/COBISS directly.
+
 ## Endpoints
 
 ```text
