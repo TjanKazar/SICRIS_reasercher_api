@@ -69,6 +69,23 @@ MONGODB_COLLECTION="author_queries"
 
 For a local MongoDB server, use `MONGODB_URI="mongodb://localhost:27017"` instead. If the username or password contains reserved URL characters such as `@`, `:`, `/`, or `#`, URL-encode it before inserting it into the connection string.
 
+For a deployed instance, you can set the connection at runtime instead. First obtain API tokens, then call:
+
+```http
+POST /config/mongodb
+Authorization: <sicris_authorization>
+CSESSIONID: <cobiss_session_id>
+Content-Type: application/json
+
+{
+  "mongodb_uri": "mongodb+srv://<username>:<password>@<cluster-host>/?retryWrites=true&w=majority",
+  "database": "sicris",
+  "collection": "author_queries"
+}
+```
+
+The endpoint validates the connection, creates the cache index, and never returns the URI. This setting is kept only in the running process: configure it again after a restart or set `MONGODB_URI` in the deployment's environment settings for persistence.
+
 When `MONGODB_URI` is set, a complete researcher bibliography is saved after it is queried. Cached results are served only for seven days after `updated_at`. On the next request after that period, the service fetches fresh SICRIS/COBISS data and overwrites the stored document; stale records are never returned. `POST /records/{user_number}/cache` reports whether the stored entry is fresh or stale.
 
 ## Endpoints
@@ -90,6 +107,7 @@ POST /records/{user_number}/types
 POST /authors/unique?user_numbers=35512&user_numbers=27561
 POST /authors/collaborations?user_numbers=35512&user_numbers=27561
 POST /authors/common?user_numbers=35512&user_numbers=27561
+POST /config/mongodb
 ```
 
 The COBISS session lasts 15 minutes. Request new tokens when it expires.

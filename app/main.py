@@ -10,7 +10,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.services.auth import get_jwt
 from app.services.cobiss import create_session, fetch_cobiss_records
-from app.services.mongo_cache import get_cache_metadata, get_cached_query, save_query_document
+from app.services.mongo_cache import configure_mongodb, get_cache_metadata, get_cached_query, save_query_document
 from app.services.sircis import fetch_author_basic_data, fetch_ids
 
 app = FastAPI(title="SICRIS / COBISS Records API")
@@ -24,6 +24,12 @@ class ApiCredentials(BaseModel):
 class CredentialsBody(BaseModel):
     sicris: ApiCredentials
     cobiss: ApiCredentials
+
+
+class MongoConfigBody(BaseModel):
+    mongodb_uri: str
+    database: str = "sicris"
+    collection: str = "author_queries"
 
 
 @dataclass(frozen=True)
@@ -77,6 +83,20 @@ async def create_tokens(credentials: CredentialsBody):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/config/mongodb")
+async def configure_mongodb_connection(
+    config: MongoConfigBody,
+    _: ApiTokens = Depends(_require_tokens),
+):
+    """Set and validate MongoDB cache settings for this running service instance."""
+    try:
+        return {"configured": True, **await configure_mongodb(config.mongodb_uri, config.database, config.collection)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MongoDB connection failed: {exc}") from exc
 
 
 def _record_year(record: dict) -> int | None:

@@ -7,18 +7,19 @@ from motor.motor_asyncio import AsyncIOMotorClient
 _client: AsyncIOMotorClient | None = None
 _index_ready = False
 CACHE_MAX_AGE = timedelta(days=7)
+_runtime_config: dict[str, str] = {}
 
 
 def _mongodb_uri() -> str | None:
-    return os.getenv("MONGODB_URI")
+    return _runtime_config.get("uri") or os.getenv("MONGODB_URI")
 
 
 def _mongodb_db_name() -> str:
-    return os.getenv("MONGODB_DB", "sicris")
+    return _runtime_config.get("database") or os.getenv("MONGODB_DB", "sicris")
 
 
 def _mongodb_collection_name() -> str:
-    return os.getenv("MONGODB_COLLECTION", "author_queries")
+    return _runtime_config.get("collection") or os.getenv("MONGODB_COLLECTION", "author_queries")
 
 
 def _cache_cutoff() -> datetime:
@@ -69,6 +70,50 @@ async def _get_collection():
         _index_ready = True
 
     return collection
+
+
+async def configure_mongodb(uri: str, database: str = "sicris", collection: str = "author_queries") -> dict[str, str]:
+    """Validate and activate MongoDB settings for the current application process."""
+    global _client, _index_ready
+
+    if not uri.startswith(("mongodb://", "mongodb+srv://")):
+        raise ValueError("mongodb_uri must start with mongodb:// or mongodb+srv://")
+    if not database.strip() or not collection.strip():
+        raise ValueError("database and collection must not be empty")
+
+    candidate = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=5_000)
+    try:
+        await candidate.admin.command("ping")
+    except Exception:
+        candidate.close()
+        raise
+
+    previous_client = _client
+    previous_index_ready = _index_ready
+    previous_config = dict(_runtime_config)
+    _runtime_config.update(
+        {"uri": uri, "database": database.strip(), "collection": collection.strip()}
+    )
+    _client = candidate
+    _index_ready = False
+    try:
+        await _get_collection()
+    except Exception:
+        candidate.close()
+        _runtime_config.clear()
+        _runtime_config.update(previous_config)
+        _client = previous_client
+        _index_ready = previous_index_ready
+        raise
+
+    if previous_client is not None and previous_client is not candidate:
+        previous_client.close()
+
+    return {
+        "database": _mongodb_db_name(),
+        "collection": _mongodb_collection_name(),
+        "connection": _mongodb_uri_summary(),
+    }
 
 
 async def get_cached_query(user_number: str):

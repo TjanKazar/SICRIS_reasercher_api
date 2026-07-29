@@ -52,6 +52,10 @@
       "value": ""
     },
     {
+      "key": "mongodb_uri",
+      "value": "mongodb+srv://<username>:<password>@<cluster-host>/?retryWrites=true&w=majority"
+    },
+    {
       "key": "author_id",
       "value": "35512"
     },
@@ -145,6 +149,38 @@
                 "docs"
               ]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Configuration",
+      "item": [
+        {
+          "name": "Set MongoDB cache connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mongodb_uri\": \"{{mongodb_uri}}\",\n  \"database\": \"sicris\",\n  \"collection\": \"author_queries\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/config/mongodb",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "config",
+                "mongodb"
+              ]
+            },
+            "description": "Run Auth / Get API tokens first. Validates and enables MongoDB caching for the running service instance; it does not return the connection string."
           }
         }
       ]
