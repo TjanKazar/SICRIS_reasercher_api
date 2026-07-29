@@ -2,34 +2,53 @@
   "info": {
     "_postman_id": "7b65c697-8eb5-4387-8ab8-f05f297c5149",
     "name": "SICRIS COBISS API",
-    "description": "Token-based examples for presenting the SICRIS / COBISS FastAPI service. Run Auth / Get token first.",
+    "description": "Run Auth / Get API tokens first. It stores both API tokens and all remaining requests attach them automatically.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
-    "type": "bearer",
-    "bearer": [
-      {
-        "key": "token",
-        "value": "{{token}}",
-        "type": "string"
-      }
-    ]
+    "type": "noauth"
   },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const authorization = pm.collectionVariables.get('sicris_authorization');",
+          "const sessionId = pm.collectionVariables.get('cobiss_session_id');",
+          "if (authorization) { pm.request.headers.upsert({ key: 'Authorization', value: authorization }); }",
+          "if (sessionId) { pm.request.headers.upsert({ key: 'CSESSIONID', value: sessionId }); }"
+        ]
+      }
+    }
+  ],
   "variable": [
     {
       "key": "base_url",
-      "value": "https://sicris-reasercher-api.onrender.com"
+      "value": "http://127.0.0.1:8000"
     },
     {
-      "key": "username",
+      "key": "sicris_username",
       "value": "your-sicris-username"
     },
     {
-      "key": "password",
+      "key": "sicris_password",
       "value": "your-sicris-password"
     },
     {
-      "key": "token",
+      "key": "cobiss_username",
+      "value": "your-cobiss-username"
+    },
+    {
+      "key": "cobiss_password",
+      "value": "your-cobiss-password"
+    },
+    {
+      "key": "sicris_authorization",
+      "value": ""
+    },
+    {
+      "key": "cobiss_session_id",
       "value": ""
     },
     {
@@ -58,7 +77,7 @@
       "name": "Auth",
       "item": [
         {
-          "name": "Get token",
+          "name": "Get API tokens",
           "event": [
             {
               "listen": "test",
@@ -66,10 +85,12 @@
                 "type": "text/javascript",
                 "exec": [
                   "const json = pm.response.json();",
-                  "pm.test('token returned', function () {",
-                  "  pm.expect(json.access_token).to.be.a('string').and.not.empty;",
+                  "pm.test('both API tokens returned', function () {",
+                  "  pm.expect(json.sicris_authorization).to.be.a('string').and.match(/^Bearer /);",
+                  "  pm.expect(json.cobiss_session_id).to.be.a('string').and.not.empty;",
                   "});",
-                  "pm.collectionVariables.set('token', json.access_token);"
+                  "pm.collectionVariables.set('sicris_authorization', json.sicris_authorization);",
+                  "pm.collectionVariables.set('cobiss_session_id', json.cobiss_session_id);"
                 ]
               }
             }
@@ -87,19 +108,19 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+              "raw": "{\n  \"sicris\": {\n    \"username\": \"{{sicris_username}}\",\n    \"password\": \"{{sicris_password}}\"\n  },\n  \"cobiss\": {\n    \"username\": \"{{cobiss_username}}\",\n    \"password\": \"{{cobiss_password}}\"\n  }\n}"
             },
             "url": {
-              "raw": "{{base_url}}/auth/token",
+              "raw": "{{base_url}}/auth/tokens",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "auth",
-                "token"
+                "tokens"
               ]
             },
-            "description": "Exchange SICRIS username/password for a Bearer token. This request stores access_token in the collection token variable."
+            "description": "Exchanges provider credentials for both the SICRIS JWT and COBISS CSESSIONID, then saves them as collection variables."
           }
         }
       ]
@@ -146,7 +167,7 @@
                 "{{author_id}}"
               ]
             },
-            "description": "Fetch all records for one SICRIS researcher. Checks MongoDB first, then scrapes and schedules cache save on miss."
+            "description": "Fetch all records for one SICRIS researcher. Checks MongoDB first, then exports records through the COBISS REST API and schedules cache save on miss."
           }
         },
         {

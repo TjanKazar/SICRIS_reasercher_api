@@ -1,133 +1,103 @@
+"""COBISS REST API client for exporting bibliographic records as RIS JSON."""
+
 import asyncio
+import os
+from collections.abc import Mapping
+from typing import Any
 
-from app.services.http_client import get
-from bs4 import BeautifulSoup
-import re
+from app.services.http_client import get, post
 
-BASE_URL = "https://plus.cobiss.net/cobiss/si/sl/data/cobib"
-
-
-DETAIL_LABELS = {
-    "Avtor",
-    "Naslov",
-    "Jezik",
-    "Vrsta gradiva",
-    "Tip dela",
-    "Leto",
-    "Fizični opis",
-    "Opombe",
-    "Abstract",
-    "Vir",
-    "Nekontrolirane predmetne oznake",
-    "UDK",
-    "DOI",
-    "Povezava",
-    "Način dostopa (URL)",
-    "Povzetek",
-}
-
-DETAIL_SECTION_END_MARKERS = {
-    "Podatki o zapisu",
-    "Pogoji uporabe",
-    "Politika zasebnosti",
-    "Piškotki",
-    "Izjava o dostopnosti",
-}
+API_BASE_URL = os.getenv("COBISS_API_BASE_URL", "https://ws.cobiss.net/cobiss-rest").rstrip("/")
+DATABASE = os.getenv("COBISS_DATABASE", "si")
 
 
-def _extract_lines(soup: BeautifulSoup) -> list[str]:
-    return [
-        line.strip()
-        for line in soup.get_text("\n", strip=True).splitlines()
-        if line.strip()
-    ]
-
-
-def _extract_cobiss_id(lines: list[str], fallback_id: int) -> int:
-    for line in lines:
-        match = re.search(r"COBISS-ID:\s*(\d+)", line)
-        if match:
-            return int(match.group(1))
-    return fallback_id
-
-
-def _extract_detail_data(lines: list[str]) -> dict[str, str]:
-    if "Podrobni podatki" not in lines:
-        return {}
-
-    start_index = lines.index("Podrobni podatki") + 1
-    details: dict[str, str] = {}
-    i = start_index
-
-    while i < len(lines):
-        line = lines[i]
-
-        if line in DETAIL_SECTION_END_MARKERS:
-            break
-
-        if line in DETAIL_LABELS:
-            label = line
-            i += 1
-            value_lines: list[str] = []
-
-            while i < len(lines):
-                current = lines[i]
-                if current in DETAIL_LABELS or current in DETAIL_SECTION_END_MARKERS:
-                    break
-                value_lines.append(current)
-                i += 1
-
-            details[label] = " ".join(value_lines).strip()
-            continue
-
-        i += 1
-
-    return details
-
-
-async def scrape_cobiss(cobiss_id: int, _token: str):
-    url = f"{BASE_URL}/{cobiss_id}"
-
-    # plus.cobiss.net can return malformed Transfer-Encoding headers.
-    # Forcing identity encoding avoids httpx RemoteProtocolError.
-    r = await get(
-        url,
-        params={"format": "detail"},
-        headers={"Accept-Encoding": "identity"},
+async def create_session(username: str, password: str) -> str:
+    """Authenticate with COBISS and return the CSESSIONID for API requests."""
+    response = await post(
+        f"{API_BASE_URL}/auth",
+        json={"username": username, "password": password, "version": 3.0, "language": "slv"},
+        headers={"Accept": "application/json"},
     )
-    r.raise_for_status()
+    if response.status_code == 403:
+        raise RuntimeError("COBISS authentication failed: check cobiss.username and cobiss.password")
+    response.raise_for_status()
+    payload = response.json()
+    session_id = payload.get("csessionid")
+    if not session_id:
+        raise RuntimeError("COBISS authentication response did not contain csessionid")
+    return str(session_id)
 
-    soup = BeautifulSoup(r.text, "lxml")
-    lines = _extract_lines(soup)
-    detail_data = _extract_detail_data(lines)
 
-    title = detail_data.get("Naslov")
-    authors_raw = detail_data.get("Avtor")
+def _first(record: Mapping[str, list[str]], field: str) -> str | None:
+    values = record.get(field) or []
+    return str(values[0]).strip() if values and str(values[0]).strip() else None
 
+
+def _values(record: Mapping[str, list[str]], *fields: str) -> list[str]:
+    return [str(value).strip() for field in fields for value in record.get(field, []) if str(value).strip()]
+
+
+def _normalise_ris(payload: Any) -> dict[str, list[str]]:
+    if not isinstance(payload, dict):
+        raise RuntimeError("COBISS RIS export response was not a JSON object")
     return {
-        "id": _extract_cobiss_id(lines, cobiss_id),
-        "title": title,
-        "authors": [author.strip() for author in authors_raw.split(";")] if authors_raw else [],
-        "url": f"{url}?format=detail",
-        "podrobni_podatki": detail_data,
+        str(key): [str(item) for item in value] if isinstance(value, list) else [str(value)]
+        for key, value in payload.items()
+        if value is not None
     }
 
 
-async def scrape_cobiss_many(cobiss_ids: list[int], token: str, concurrency: int = 5):
-    sem = asyncio.Semaphore(concurrency)
+def _record_from_ris(requested_id: int, ris: dict[str, list[str]]) -> dict[str, Any]:
+    authors = _values(ris, "AU", "A1")
+    title = _first(ris, "TI") or _first(ris, "T1")
+    record_id = _first(ris, "ID") or str(requested_id)
+    details = {
+        "Avtor": "; ".join(authors),
+        "Naslov": title,
+        "Leto": _first(ris, "PY") or _first(ris, "Y1"),
+        "Tip dela": _first(ris, "TY"),
+        "DOI": _first(ris, "DO"),
+        "Vir": _first(ris, "JO") or _first(ris, "T2") or _first(ris, "JF"),
+        "Jezik": _first(ris, "LA"),
+        "Povezava": _first(ris, "UR"),
+    }
+    return {
+        "id": int(record_id) if record_id.isdigit() else record_id,
+        "title": title,
+        "authors": authors,
+        "url": f"{API_BASE_URL}/ris/{requested_id}",
+        "podrobni_podatki": {key: value for key, value in details.items() if value},
+        "ris": ris,
+    }
 
-    async def safe_scrape(cobiss_id: int):
-        async with sem:
-            return await scrape_cobiss(cobiss_id, token)
 
-    results = await asyncio.gather(*(safe_scrape(cobiss_id) for cobiss_id in cobiss_ids), return_exceptions=True)
+async def fetch_cobiss_record(cobiss_id: int, session_id: str) -> dict[str, Any]:
+    """Fetch one COBISS record through the documented RIS JSON endpoint."""
+    response = await get(
+        f"{API_BASE_URL}/ris/{cobiss_id}",
+        params={"database": DATABASE} if DATABASE else None,
+        headers={"CSESSIONID": session_id, "Accept": "application/json"},
+    )
+    if response.status_code == 401:
+        raise RuntimeError("COBISS session has expired; request new tokens from POST /auth/tokens")
+    response.raise_for_status()
+    return _record_from_ris(cobiss_id, _normalise_ris(response.json()))
 
-    cleaned: list[dict] = []
+
+async def fetch_cobiss_records(cobiss_ids: list[int], session_id: str, concurrency: int = 5):
+    """Export several records concurrently, returning successful records and errors."""
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def fetch_one(cobiss_id: int):
+        async with semaphore:
+            return await fetch_cobiss_record(cobiss_id, session_id)
+
+    results = await asyncio.gather(*(fetch_one(cobiss_id) for cobiss_id in cobiss_ids), return_exceptions=True)
+    records: list[dict[str, Any]] = []
     errors: list[str] = []
     for result in results:
         if isinstance(result, Exception):
             errors.append(str(result))
-            continue
-        cleaned.append(result)
-
-    return cleaned, errors
+        else:
+            records.append(result)
+    return records, errors

@@ -1,66 +1,79 @@
 # SICRIS / COBISS API
 
-FastAPI servis za pridobivanje bibliografij raziskovalcev iz SICRIS-a, branje podrobnosti zapisov iz COBISS-a in osnovne poizvedbe nad deli.
+FastAPI service for retrieving researcher bibliographies from SICRIS and exporting each COBISS record through the official COBISS REST API. It does not scrape COBISS HTML pages.
 
-Primeri raziskovalcev:
+## Configuration
 
-- `35512`
-- `27561`
-- `39791`
+Credentials are supplied only to `POST /auth/tokens`; they are not read from `.env` and are not stored by the service. The root `.env` remains available for optional MongoDB cache settings and is ignored by Git and excluded from Docker build context.
 
-## Zagon
+## Run
 
 ```bash
-uv run uvicorn app.main:app --reload
+uv sync
+uv run python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Privzeti URL:
+Or with Docker:
 
-```text
-http://localhost:8000
+```bash
+docker compose up --build
 ```
 
-OpenAPI dokumentacija:
+OpenAPI documentation is available at `http://localhost:8000/docs`.
 
-```text
-http://localhost:8000/docs
-```
+## API behaviour
 
-## Avtentikacija
-
-Najprej pridobi token:
+First obtain both API tokens with provider credentials:
 
 ```http
-POST /auth/token
-```
+POST /auth/tokens
+Content-Type: application/json
 
-```json
 {
-  "username": "sicris-uporabnik",
-  "password": "sicris-geslo"
+  "sicris": {
+    "username": "sicris-username",
+    "password": "sicris-password"
+  },
+  "cobiss": {
+    "username": "cobiss-username",
+    "password": "cobiss-password"
+  }
 }
 ```
 
-Odgovor:
-
-```json
-{
-  "token_type": "bearer",
-  "access_token": "..."
-}
-```
-
-Pri ostalih zahtevkih uporabi:
+The response contains `sicris_authorization` (the exact `Bearer ...` value returned by SICRIS) and `cobiss_session_id`. All data requests must provide them as:
 
 ```http
-Authorization: Bearer <access_token>
+Authorization: <sicris_authorization>
+CSESSIONID: <cobiss_session_id>
 ```
 
-Način, kjer se `username` in `password` posljeta v telesu vsake zahteve deluje, vendar je Bearer token priporocen.
+The service resolves the researcher's COBISS IDs through SICRIS, then calls:
 
-## Endpointi
+```text
+POST https://ws.cobiss.net/cobiss-rest/auth
+GET  https://ws.cobiss.net/cobiss-rest/ris/{cobiss-id}?database=si
+```
 
-```http
+Each result includes convenient fields (`id`, `title`, `authors`, `podrobni_podatki`) and the unmodified `ris` export object returned by COBISS.
+
+## MongoDB cache
+
+Add the following to the root `.env` file to enable the cache:
+
+```dotenv
+MONGODB_URI="mongodb+srv://<username>:<password>@<cluster-host>/?retryWrites=true&w=majority"
+MONGODB_DB="sicris"
+MONGODB_COLLECTION="author_queries"
+```
+
+For a local MongoDB server, use `MONGODB_URI="mongodb://localhost:27017"` instead. If the username or password contains reserved URL characters such as `@`, `:`, `/`, or `#`, URL-encode it before inserting it into the connection string.
+
+When `MONGODB_URI` is set, a complete researcher bibliography is saved after it is queried. Cached results are served only for seven days after `updated_at`. On the next request after that period, the service fetches fresh SICRIS/COBISS data and overwrites the stored document; stale records are never returned. `POST /records/{user_number}/cache` reports whether the stored entry is fresh or stale.
+
+## Endpoints
+
+```text
 POST /records/{user_number}
 POST /records/{user_number}?limit=20
 POST /records/{user_number}/refresh
@@ -71,65 +84,14 @@ POST /records/{user_number}/years
 POST /records/{user_number}/coauthored
 POST /records/{user_number}/solo
 POST /records/{user_number}/doi
+POST /records/{user_number}/search?q=machine
 POST /records/{user_number}/types
-```
 
-Kratek pomen:
-
-- `records`: vsa dela raziskovalca.
-- `limit`: vrne samo prvih N zapisov.
-- `refresh`: prisilno osvezi podatke iz SICRIS/COBISS in jih shrani v MongoDB.
-- `cache`: vrne podatke o MongoDB predpomnilniku.
-- `latest`: najnovejsa dela po polju `Leto`.
-- `year` / `years`: dela po letu oziroma povzetek po letih.
-- `coauthored`: dela z dvema ali vec avtorji.
-- `solo`: dela z enim ali brez navedenih avtorjev.
-- `doi`: dela z DOI identifikatorjem.
-- `types`: povzetek po tipu dela.
-
-DOI pomeni Digital Object Identifier. To je stalni identifikator publikacije, pogosto uporabljen pri znanstvenih clankih.
-
-Poizvedbe cez vec avtorjev:
-
-```http
-POST /authors/unique?user_numbers=35512&user_numbers=27561&user_numbers=39791
-POST /authors/collaborations?user_numbers=35512&user_numbers=27561&user_numbers=39791
+POST /authors/unique?user_numbers=35512&user_numbers=27561
+POST /authors/collaborations?user_numbers=35512&user_numbers=27561
 POST /authors/common?user_numbers=35512&user_numbers=27561
 ```
 
-- `unique`: vsa unikatna dela vec raziskovalcev.
-- `collaborations`: skupna/soavtorska dela.
-- `common`: dela, ki se pojavijo pri vseh podanih raziskovalcih.
+The COBISS session lasts 15 minutes. Request new tokens when it expires.
 
-## Postman
-
-Datoteko `postman_collection.json` lahko uvozis v Postman.
-
-Nastavi spremenljivke:
-
-- `base_url`: npr. `http://localhost:8000`
-- `username`: SICRIS uporabnisko ime
-- `password`: SICRIS geslo
-- `author_id`: privzeto `35512`
-- `author_id_2`: privzeto `27561`
-- `author_id_3`: privzeto `39791`
-
-Najprej zazeni `Auth / Get token`. Postman sam shrani `access_token` v spremenljivko `token`.
-
-## MongoDB cache
-
-Za predpomnjenje nastavi:
-
-```bash
-MONGODB_URI="mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority"
-MONGODB_DB="sicris"
-MONGODB_COLLECTION="author_queries"
-```
-
-Ce `MONGODB_URI` ni nastavljen, API vseeno deluje, samo cache se preskoci. Pri poizvedbah se najprej preveri MongoDB; ob cache miss se podatki pridobijo iz SICRIS/COBISS in shranijo v MongoDB.
-
-## Docker
-
-```bash
-docker compose up --build
-```
+Import `postman_collection.json`, set its `sicris_username`, `sicris_password`, `cobiss_username`, and `cobiss_password` variables, then run `Auth / Get API tokens`. Its test script saves both tokens, and its collection-level pre-request script forwards the SICRIS `Authorization` value unchanged and adds the COBISS `CSESSIONID` header to the remaining requests.

@@ -1,15 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from urllib.parse import urlparse
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from app.services.auth import get_jwt
-from app.services.cobiss import scrape_cobiss_many
-from app.services.sircis import fetch_author_basic_data, fetch_ids
-
 _client: AsyncIOMotorClient | None = None
 _index_ready = False
+CACHE_MAX_AGE = timedelta(days=7)
 
 
 def _mongodb_uri() -> str | None:
@@ -22,6 +19,20 @@ def _mongodb_db_name() -> str:
 
 def _mongodb_collection_name() -> str:
     return os.getenv("MONGODB_COLLECTION", "author_queries")
+
+
+def _cache_cutoff() -> datetime:
+    return datetime.now(timezone.utc) - CACHE_MAX_AGE
+
+
+def is_cache_fresh(document: dict, *, now: datetime | None = None) -> bool:
+    """Return whether a completed cache document was refreshed within seven days."""
+    updated_at = document.get("updated_at")
+    if not document.get("complete") or not isinstance(updated_at, datetime):
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return updated_at >= (now or datetime.now(timezone.utc)) - CACHE_MAX_AGE
 
 
 def _mongodb_uri_summary() -> str:
@@ -67,8 +78,11 @@ async def get_cached_query(user_number: str):
 
     print(f"[mongo] cache lookup start for {user_number} ({_mongodb_uri_summary()})")
     collection = await _get_collection()
-    cached = await collection.find_one({"user_number": user_number, "complete": True}, {"_id": False})
-    print(f"[mongo] cache lookup {'hit' if cached else 'miss'} for {user_number}")
+    cached = await collection.find_one(
+        {"user_number": user_number, "complete": True, "updated_at": {"$gte": _cache_cutoff()}},
+        {"_id": False},
+    )
+    print(f"[mongo] cache lookup {'fresh hit' if cached else 'miss or stale'} for {user_number}")
     return cached
 
 
@@ -104,10 +118,13 @@ async def get_cache_metadata(user_number: str):
             "cached": False,
         }
 
-    print(f"[mongo] metadata lookup hit for {user_number}")
+    fresh = is_cache_fresh(cached)
+    print(f"[mongo] metadata lookup {'fresh' if fresh else 'stale'} for {user_number}")
     return {
         "cache_enabled": True,
-        "cached": bool(cached.get("complete")),
+        "cached": fresh,
+        "stale": bool(cached.get("complete")) and not fresh,
+        "max_age_days": CACHE_MAX_AGE.days,
         **cached,
     }
 
@@ -128,25 +145,3 @@ async def save_query_document(document: dict):
         upsert=True,
     )
     print(f"[mongo] save finished for {document.get('user_number')}")
-
-
-async def refresh_and_store_query(user_number: str, username: str, password: str):
-    print(f"[mongo] background refresh start for {user_number}")
-    token = await get_jwt(username, password)
-    author = await fetch_author_basic_data(user_number, token)
-    ids = await fetch_ids(user_number, token)
-    results, errors = await scrape_cobiss_many(ids, token)
-
-    if ids and not results:
-        raise Exception(f"Failed to scrape all COBISS records. Sample error: {errors[0] if errors else 'unknown'}")
-
-    await save_query_document(
-        {
-            "user_number": user_number,
-            "author": author,
-            "results": results,
-            "total_count": len(results),
-            "complete": not errors,
-        }
-    )
-    print(f"[mongo] background refresh done for {user_number}")

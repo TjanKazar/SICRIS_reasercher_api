@@ -1,31 +1,23 @@
+"""Authentication for the SICRIS researcher lookup service."""
+
 import httpx
 
 AUTH_URL = "https://cris.cobiss.net/ecris/si/sl/service/getjwt"
 
 
 async def get_jwt(username: str, password: str) -> str:
-    payload = {
-        "username": username,
-        "password": password
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-
+    """Get the SICRIS JWT used only to resolve a researcher's COBISS record IDs."""
     async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(AUTH_URL, json=payload, headers=headers)
-
-        # IMPORTANT: show real error body if it fails
-        if r.status_code != 200:
-            raise Exception(f"JWT failed: {r.status_code} - {r.text}")
-
-        data = r.json()
-
-    token = data.get("jwt") or data.get("token")
-
+        response = await client.post(
+            AUTH_URL,
+            json={"username": username, "password": password},
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+    if response.status_code == 401:
+        raise RuntimeError("SICRIS authentication failed: check sicris.username and sicris.password")
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("jwt") or payload.get("token")
     if not token:
-        raise Exception(f"No token in response: {data}")
-
-    return token
+        raise RuntimeError("SICRIS authentication response did not contain a JWT")
+    return str(token)
